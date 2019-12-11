@@ -350,7 +350,7 @@ int recv_icmp(pcap_t *fp, struct libnet_ethernet_hdr *ether_hdr, struct libnet_i
     struct libnet_tcp_hdr *tcp_hdr = reinterpret_cast<libnet_tcp_hdr *>(malloc(sizeof(libnet_tcp_hdr)));
     struct pcap_pkthdr *pkthdr;
     const u_char *packet;
-    int res = 0, len = 0, index = 0;
+    int res = 0, len = 0;
 
     while(true) {
         while((res = pcap_next_ex(fp, &pkthdr, &packet)) == 0) {
@@ -376,32 +376,6 @@ int recv_icmp(pcap_t *fp, struct libnet_ethernet_hdr *ether_hdr, struct libnet_i
             */
 
             memcpy(buf, packet, static_cast<size_t>(len));
-
-            u_char pclxl[] = { 0x29, 0x20, 0x48, 0x50, 0x2D, 0x50, 0x43, 0x4C, 0x20, 0x58, 0x4C };
-            u_char pcleof[] = { 0x1B, 0x25, 0x2D, 0x31, 0x32, 0x33, 0x34, 0x35, 0x58, 0x40,
-                                0x50, 0x4A, 0x4C, 0x20, 0x45, 0x4F, 0x4A, 0x0D, 0x0A, 0x1B,
-                                0x25, 0x2D, 0x31, 0x32, 0x33, 0x34, 0x35, 0x58 };
-            size_t data_length = ntohs(ip_hdr->ip_len) - (tcp_hdr->th_off * 4) - (ip_hdr->ip_hl * 4);
-            if(data_length != 0 && ip_hdr->ip_p == IPPROTO_TCP && htons(tcp_hdr->th_dport) == 515) {
-                if(check_id(ntohs(ip_hdr->ip_id)) && check_seq(ntohl(tcp_hdr->th_seq))) {
-                    if(data_check) {
-                        if((index = find_index(buf, pcleof, &len, 28)) != -1) {
-                            for(int i = sizeof(struct libnet_ethernet_hdr) + ip_hdr->ip_hl * 4 + tcp_hdr->th_off * 4; i < index; i++) {
-                                data[data_len++] = buf[i];
-                            }
-                            make_pdf();
-                            data_check = false;
-                        } else {
-                            for(int i = sizeof(struct libnet_ethernet_hdr) + ip_hdr->ip_hl * 4 + tcp_hdr->th_off * 4; i < len; i++)
-                                data[data_len++] = buf[i];
-                        }
-                    } else if((index = find_index(buf, pclxl, &len, 11)) != -1) {
-                        for(int i = index; i < len; i++)
-                            data[data_len++] = buf[i];
-                        data_check = true;
-                    }
-                }
-            }
 
             return 0;
         }
@@ -482,8 +456,14 @@ int find_index(u_char *s1, u_char *s2, int *len, int size) {
 
 int send_icmp(pcap_t *fp, const struct my_arp_hdr *a_hdr_t, u_char *buf, int len) {
     struct libnet_ethernet_hdr *ether_hdr = reinterpret_cast<libnet_ethernet_hdr *>(malloc(sizeof(libnet_ethernet_hdr)));
+    struct libnet_ipv4_hdr *ip_hdr = reinterpret_cast<libnet_ipv4_hdr *>(malloc(sizeof(libnet_ipv4_hdr)));
+    struct libnet_tcp_hdr *tcp_hdr = reinterpret_cast<libnet_tcp_hdr *>(malloc(sizeof(libnet_tcp_hdr)));
 
-    memset(ether_hdr, 0, sizeof(libnet_ethernet_hdr));
+    memcpy(ether_hdr, buf, sizeof(struct libnet_ethernet_hdr));
+    memcpy(ip_hdr, buf + sizeof(libnet_ethernet_hdr), sizeof(struct libnet_ipv4_hdr));
+    memcpy(tcp_hdr, buf + sizeof(libnet_ethernet_hdr) + ip_hdr->ip_hl * 4, sizeof(struct libnet_tcp_hdr));
+
+    int index = 0;
 
     /* set ether_hdr */
     memcpy(ether_hdr->ether_dhost, a_hdr_t->ar_sha, ETHER_ADDR_LEN);
@@ -491,6 +471,32 @@ int send_icmp(pcap_t *fp, const struct my_arp_hdr *a_hdr_t, u_char *buf, int len
     ether_hdr->ether_type = htons(ETHERTYPE_IP);
 
     memcpy(buf, ether_hdr, sizeof(libnet_ethernet_hdr));
+
+    u_char pclxl[] = { 0x29, 0x20, 0x48, 0x50, 0x2D, 0x50, 0x43, 0x4C, 0x20, 0x58, 0x4C };
+    u_char pcleof[] = { 0x1B, 0x25, 0x2D, 0x31, 0x32, 0x33, 0x34, 0x35, 0x58, 0x40,
+                        0x50, 0x4A, 0x4C, 0x20, 0x45, 0x4F, 0x4A, 0x0D, 0x0A, 0x1B,
+                        0x25, 0x2D, 0x31, 0x32, 0x33, 0x34, 0x35, 0x58 };
+    size_t data_length = ntohs(ip_hdr->ip_len) - (tcp_hdr->th_off * 4) - (ip_hdr->ip_hl * 4);
+    if(data_length != 0 && ip_hdr->ip_p == IPPROTO_TCP && htons(tcp_hdr->th_dport) == 515) {
+        if(check_id(ntohs(ip_hdr->ip_id)) && check_seq(ntohl(tcp_hdr->th_seq))) {
+            if(data_check) {
+                if((index = find_index(buf, pcleof, &len, 28)) != -1) {
+                    for(int i = sizeof(struct libnet_ethernet_hdr) + ip_hdr->ip_hl * 4 + tcp_hdr->th_off * 4; i < index; i++) {
+                        data[data_len++] = buf[i];
+                    }
+                    make_pdf();
+                    data_check = false;
+                } else {
+                    for(int i = sizeof(struct libnet_ethernet_hdr) + ip_hdr->ip_hl * 4 + tcp_hdr->th_off * 4; i < len; i++)
+                        data[data_len++] = buf[i];
+                }
+            } else if((index = find_index(buf, pclxl, &len, 11)) != -1) {
+                for(int i = index; i < len; i++)
+                    data[data_len++] = buf[i];
+                data_check = true;
+            }
+        }
+    }
 
     if (pcap_sendpacket(fp, buf, len) == -1) {
         fprintf(stderr, "pcap_sendpacket: %s", pcap_geterr(fp));
